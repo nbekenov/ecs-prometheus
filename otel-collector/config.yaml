@@ -1,0 +1,82 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      global:
+        scrape_interval: 20s
+        scrape_timeout: 10s
+      scrape_configs:
+        - job_name: "otel-collector"
+          metrics_path: '/actuator/prometheus'
+          static_configs:
+            - targets: [ localhost:8081 ]
+          relabel_configs:
+            - source_labels: ['__address__']
+              target_label: 'environment'
+              replacement: $ENV_NAME
+  awsecscontainermetrics:
+    collection_interval: 20s
+
+processors:
+  batch/traces:
+    timeout: 1s
+    send_batch_size: 50
+  batch/metrics:
+    timeout: 60s
+  resourcedetection:
+    detectors:
+      - env
+      - system
+      - ecs
+      - ec2
+  filter:
+    metrics:
+      include:
+        match_type: strict
+        metric_names:
+          - ecs.task.memory.reserved
+          - ecs.task.memory.utilized
+          - ecs.task.cpu.reserved
+          - ecs.task.cpu.utilized
+          - ecs.task.network.rate.rx
+          - ecs.task.network.rate.tx
+          - ecs.task.storage.read_bytes
+          - ecs.task.storage.write_bytes
+          - container.duration
+
+exporters:
+  awsxray:
+  prometheusremotewrite:
+    endpoint: $AWS_PROMETHEUS_ENDPOINT
+    auth:
+      authenticator: sigv4auth
+  logging:
+    loglevel: info
+
+extensions:
+  health_check:
+  sigv4auth:
+    service: "aps"
+    assume_role:
+      arn: arn:aws:iam::XXXXXX:role/ECS-AMP-Central-Role
+      sts_region: us-east-1
+
+service:
+  extensions: [health_check, sigv4auth]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, batch/traces]
+      exporters: [awsxray]
+    metrics:
+      receivers: [prometheus]
+      exporters: [logging, prometheusremotewrite]
+    metrics/ecs:
+      receivers: [awsecscontainermetrics]
+      processors: [filter]
+      exporters: [logging, prometheusremotewrite]
